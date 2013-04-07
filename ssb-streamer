@@ -1,0 +1,192 @@
+#! /bin/bash
+
+# Check for installed required packages
+if ! hash icecast2 2> /dev/null; then
+    echo "*!* ERROR: Could not find icecast2"
+    exit 1
+fi
+
+if ! hash squeezy 2> /dev/null; then
+    echo "*!* ERROR: Could not find squeezy"
+    echo "Check: https://code.google.com/p/squeezy/"
+    exit 1
+fi
+
+if ! hash curl 2> /dev/null; then
+    echo "*!* ERROR: Could not find curl"
+    exit 1
+fi
+
+# Load configuration variables
+. $HOME/.ssb.conf
+
+# Spotify local IP
+if [[ "$STREAM_HOST" == "" ]]; then
+    # Try to guess..
+    STREAM_HOST=$(ip addr show | grep -v "127.0.0.1" \
+        | egrep -o "inet ([0-9]{1,3}\.){3}[0-9]{1,3}" | awk '{print $2}')
+fi
+
+function startStream() {
+    if ! `pgrep spotify` &> /dev/null; then
+        spotify &> /dev/null &
+        if (( $? != 0 )); then
+            echo "*!* ERROR: Could not start spotify"
+        fi
+    fi
+
+    if ! pactl list | grep -q "Name: $MDEV"; then
+        pactl load-module module-null-sink sink_name=$SINKNAME &> /dev/null
+        if (( $? != 0 )); then
+            echo "*!* ERROR: Could not load spotify monitor"
+            exit 1
+        fi
+    fi
+
+    # Change sink manually if it is not auto-detected
+    if ! pactl list | grep -q "Name: $MDEV"; then
+        pavucontrol
+    fi
+
+    ice_pid=$(pgrep icecast2)
+    if [[ "$ice_pid" != *[0-9]* ]]; then
+        icecast2 -c $ICE_CFG &
+        ice_pid=$!
+    fi
+
+    gst_pid=$(pgrep gst-launch-0.10)
+    if [[ "$gst_pid" != *[0-9]* ]]; then
+        gst-launch-0.10 pulsesrc device=$MDEV ! audioconvert\
+            ! lame bitrate=$ICE_BIT mode=stereo\
+            ! shout2send ip=$ICE_IP port=$STREAMINGPORT password=$ICE_PWD\
+            mount=$STREAMNAME &> /dev/null &
+            gst_pid=$!
+    fi
+
+    count=0
+    while ! curl -s localhost:$STREAMINGPORT | grep -q $STREAMNAME; do
+        sleep 2
+        let count=count+1
+        if (( $count == 5 )); then
+            echo -e "\n*!* ERROR: Could not start stream"
+            stopStream
+            exit 1
+        fi
+    done
+
+    if [[ $ice_pid != *[0-9]* || $gst_pid != *[0-9]* ]]; then
+       echo "*!* ERROR: Could not start stream"
+       stopStream
+       exit 1
+   fi
+}
+
+function stopStream() {
+    killall icecast2 &> /dev/null && killall gst-launch-0.10 &> /dev/null
+    if (( $? == 0 )); then
+        module=$(pactl list short | grep "sink_name=$SINKNAME" | awk '{print $1}')
+        if [[ $module != "" ]]; then
+            pactl unload-module $module
+        fi
+    else
+        echo -e "*!* ERROR: Could not stop stream\nStream not running?"
+        return 1
+    fi
+    echo "Streaming stopped"
+}
+
+function unloadModules() {
+    modules=$(pactl list short | grep "sink_name=$SINKNAME" | awk '{print $1}')
+#    modules=$(pactl list short | egrep -o "^[0-9]+[[:space:]]+module-null-sink")
+    for module in $modules; do
+        pactl unload-module $module
+    done
+}
+
+function makeicecfg() {
+    cat > $ICE_CFG << EOF
+    <icecast>                                                                       
+        <limits>                                                                    
+            <sources>1</sources>                                                    
+        </limits>                                                                   
+        <authentication>                                                            
+            <source-password>$ICE_PWD</source-password>                              
+            <relay-password>$ICE_PWD</relay-password>                                
+            <admin-user>admin</admin-user>                                          
+            <admin-password>$ICE_PWD</admin-password>                                
+        </authentication>                                                           
+        <directory>                                                                 
+            <yp-url-timeout>15</yp-url-timeout>                                     
+            <yp-url>http://dir.xiph.org/cgi-bin/yp-cgi</yp-url>                     
+        </directory>                                                                
+        <hostname>$ICE_IP</hostname>                                              
+        <listen-socket>                                                             
+            <port>$STREAMINGPORT</port>                                             
+        </listen-socket>                                                            
+        <fileserve>1</fileserve>                                                    
+        <paths>                                                                     
+            <logdir>$ICE_WDIR</logdir>                                    
+            <webroot>/usr/share/icecast2/web</webroot>                              
+            <adminroot>/usr/share/icecast2/admin</adminroot>                        
+            <alias source="/" dest="/status.xsl"/>                                  
+        </paths>                                                                    
+        <logging>                                                                   
+            <accesslog>access.log</accesslog>                                       
+            <errorlog>error.log</errorlog>                                          
+            <loglevel>3</loglevel> <!-- 4 Debug, 3 Info, 2 Warn, 1 Error -->        
+        </logging>                                                                  
+    </icecast>
+EOF
+}
+
+case "$1" in
+    start)
+        makeicecfg
+        startStream
+        squeezy -silent -play "http://$STREAM_HOST:$STREAMINGPORT/$STREAMNAME"
+        echo "Streaming started"
+        ;;
+    stop)
+        if stopStream; then
+            if squeezy -silent -off; then
+                echo "Squeezebox powered off"
+            fi
+        fi
+        ;;
+    status)
+        RED="\E[31;31m"
+        GREEN="\E[32;32m"
+        echo -en "\e[00mSpotify:"
+        if [[ `pgrep spotify` == *[0-9]* ]]; then
+            echo -e "$GREEN OK"
+        else
+            echo -e "$RED NOT RUNNING"
+        fi
+        echo -en "\e[00mIcecast:"
+        if [[ `pgrep icecast` == *[0-9]* ]]; then
+            echo -e "$GREEN OK"
+        else
+            echo -e "$RED NOT RUNNING"
+        fi
+        echo -en "\e[00mGStreamer:"
+        if [[ `pgrep gst-launch-0.10` == *[0-9]* ]]; then
+            echo -e "$GREEN OK"
+        else
+            echo -e "$RED NOT RUNNING"
+        fi
+        echo -en "\e[00mSqueezebox server:"
+        if netcat -z -w 2 $SQUEEZESERVER $SQUEEZEPORT; then
+            echo -e "$GREEN OK"
+        else
+            echo -e "$RED NOT RUNNING"
+        fi
+        ;;
+    clean)
+        if unloadModules; then
+            echo "Unloaded modules"
+        fi
+        ;;
+    *)
+        echo "Usage: ssb-streamer start|stop|clean|status"
+        ;;
+esac

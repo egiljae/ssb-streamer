@@ -1,0 +1,24 @@
+# Monitor device name
+MDEV="spotify.monitor"
+# Pulse audio sink name
+SINKNAME=$(echo $MDEV | cut -d "." -f1)
+# Squeezebox server host
+SQUEEZESERVER="server"
+# Squeezebox server host port
+SQUEEZEPORT="9000"
+# Icecast streaming port
+STREAMINGPORT="8000"
+# Icecast stream name
+STREAMNAME="stream.mp3"
+# Spotify/stream host
+STREAM_HOST=""
+# Icecasst bitrate
+ICE_BIT="320"
+# Icecast IP
+ICE_IP=localhost
+# Icecast password
+ICE_PWD="password"
+# Icecast xml config path
+ICE_CFG="$HOME/.icecast.xml"
+# Icecast dir in home folder
+ICE_WDIR="$HOME/icecast2/"
