@@ -28,8 +28,6 @@ if [[ "$STREAM_HOST" == "" ]]; then
         | egrep -o "inet ([0-9]{1,3}\.){3}[0-9]{1,3}" | awk '{print $2}')
 fi
 
-exit
-
 function startStream() {
     if ! `pgrep spotify` &> /dev/null; then
         spotify &> /dev/null &
