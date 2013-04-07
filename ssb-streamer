@@ -23,9 +23,12 @@ fi
 # Spotify local IP
 if [[ "$STREAM_HOST" == "" ]]; then
     # Try to guess..
-    STREAM_HOST=$(ip addr show | grep -v "127.0.0.1" \
+    dev=$(ip route show | grep default | cut -d " " -f5)
+    STREAM_HOST=$(ip addr show $dev \
         | egrep -o "inet ([0-9]{1,3}\.){3}[0-9]{1,3}" | awk '{print $2}')
 fi
+
+exit
 
 function startStream() {
     if ! `pgrep spotify` &> /dev/null; then
